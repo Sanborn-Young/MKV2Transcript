@@ -1,0 +1,6 @@
+{
+  "default_model": "medium",
+  "default_format": "md",
+  "default_left_speaker": "Speaker A",
+  "default_right_speaker": "Speaker B"
+}

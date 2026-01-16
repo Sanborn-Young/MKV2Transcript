@@ -1,0 +1,10 @@
+﻿services:
+  mkv2transcript:
+    build: .
+    ports:
+      - "${GRADIO_PORT:-7860}:7860"
+    volumes:
+      - "${DATA_PATH}:/data:rw"
+      - "${WHISPER_CACHE:-./whisper-models}:/root/.cache/huggingface:rw"
+    environment:
+      - GRADIO_SERVER_NAME=0.0.0.0
