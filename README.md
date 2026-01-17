@@ -96,7 +96,14 @@ When invoked, you should be able to see the interface come up in a web browser a
 
 ![Main Screen](resources/Main_screen.png)
 
+The first thing to note is this only shows the upper part of the screen. In reality, there is more underneath it, including the ability to reset it and process another file. Secondly, due to the nature of Docker and how it processes stuff, you will need to download the document through the web browser to actually see the transcript. In other words, look at the download box underneath it called "⬇️ Download Transcript (available after processing completes)"
+ and up will pop the size of the translated file in blue. Clicking on that you can download it and put it wherever you want.
 
+ Generally, it will try and process any file that you throw at it.  If you accidently don't upload two separate audio tracks, it will text to speech both of them, see that they are duplicates, and only output one of them.  However, I don't preprocess, so it is slow.
+
+ #### Output
+
+ Why you can output in many different formats, it defaults to .md or markdown.  This file is perfect for now givving to an LLM and asking it to summarize and provide and outline of your meeting.  You can also paste it into a package like Obsidian.
 
 #### Running on Other Operating Systems
 
