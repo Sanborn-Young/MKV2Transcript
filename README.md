@@ -143,7 +143,7 @@ Options:
 
 #### License
 
-Coming soon. Probably MIT.
+MIT.
 
 #### Contributing
 
