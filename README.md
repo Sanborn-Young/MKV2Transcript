@@ -90,6 +90,14 @@ The `.env` file controls where the application can access your files. This file 
 
 > These `.bat` scripts are written specifically for Windows 11 and assume Docker Desktop with the `docker-compose` command on the PATH; users on other platforms must adapt the scripts or invoke Docker manually.
 
+#### The Interface
+
+When invoked, you should be able to see the interface come up in a web browser and it should look as follows.
+
+![Main Screen](resources/Main_screen.png)
+
+
+
 #### Running on Other Operating Systems
 
 - The core application runs inside Docker and is compatible with Linux and macOS, but:
