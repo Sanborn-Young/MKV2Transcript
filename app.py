@@ -1,14 +1,9 @@
-﻿import torch
-# Patch torch.load to use weights_only=False by default for WhisperX compatibility
-_original_load = torch.load
-torch.load = lambda *args, **kwargs: _original_load(*args, **{**kwargs, 'weights_only': False})
-
-import gradio as gr
+﻿import gradio as gr
 import subprocess
 import os
 import tempfile
 from pathlib import Path
-import whisperx
+from faster_whisper import WhisperModel
 from datetime import timedelta
 import json
 
@@ -111,7 +106,6 @@ def merge_dual_track_to_stereo(video_path, temp_dir):
 
 def process_stereo_audio(video_file, left_speaker_name, right_speaker_name,
                         output_filename, model_size="tiny.en", output_format="md"):
-    
     if not video_file:
         return "❌ Error: No file selected", None, None, None
     
@@ -188,35 +182,32 @@ def process_stereo_audio(video_file, left_speaker_name, right_speaker_name,
             yield f"❌ Error extracting right channel: {result_right.stderr}", None, None, None
             return
         
-        yield f"🤖 Loading WhisperX model (first run may take 2-3 minutes to download)...", None, None, None
+        yield f"🤖 Loading faster-whisper model (first run may take 2-3 minutes to download)...", None, None, None
         
-        # Load WhisperX model (CPU-optimized)
-        model = whisperx.load_model(
+        # Load faster-whisper model (CPU-optimized)
+        model = WhisperModel(
             model_size,
             device="cpu",
-            compute_type="int8",
-            language="en"
+            compute_type="int8"
         )
-        
-        # Load audio files
-        left_audio = whisperx.load_audio(str(left_channel))
-        right_audio = whisperx.load_audio(str(right_channel))
         
         # Transcribe left channel
         yield f"🎤 Transcribing {left_name}...", None, None, None
-        left_result = model.transcribe(
-            left_audio,
-            batch_size=8
+        left_segments, left_info = model.transcribe(
+            str(left_channel),
+            language="en",
+            beam_size=5
         )
-        left_transcript = list(left_result['segments'])
+        left_transcript = list(left_segments)
         
         # Transcribe right channel
         yield f"🎤 Transcribing {right_name}...", None, None, None
-        right_result = model.transcribe(
-            right_audio,
-            batch_size=8
+        right_segments, right_info = model.transcribe(
+            str(right_channel),
+            language="en",
+            beam_size=5
         )
-        right_transcript = list(right_result['segments'])
+        right_transcript = list(right_segments)
         
         yield "📝 Merging transcripts...", None, None, None
         
@@ -224,20 +215,20 @@ def process_stereo_audio(video_file, left_speaker_name, right_speaker_name,
         transcript = []
         for seg in left_transcript:
             transcript.append({
-                "start": seg['start'],
-                "end": seg['end'],
+                "start": seg.start,
+                "end": seg.end,
                 "speaker": left_name,
                 "channel": "left",
-                "text": seg['text'].strip()
+                "text": seg.text.strip()
             })
         
         for seg in right_transcript:
             transcript.append({
-                "start": seg['start'],
-                "end": seg['end'],
+                "start": seg.start,
+                "end": seg.end,
                 "speaker": right_name,
                 "channel": "right",
-                "text": seg['text'].strip()
+                "text": seg.text.strip()
             })
         
         # Sort by timestamp
@@ -254,8 +245,8 @@ def process_stereo_audio(video_file, left_speaker_name, right_speaker_name,
                 return False
             
             # Compare text content
-            left_text = " ".join([seg['text'].strip() for seg in left_trans])
-            right_text = " ".join([seg['text'].strip() for seg in right_trans])
+            left_text = " ".join([seg.text.strip() for seg in left_trans])
+            right_text = " ".join([seg.text.strip() for seg in right_trans])
             
             # Simple similarity check
             if left_text == right_text:
@@ -294,7 +285,6 @@ def process_stereo_audio(video_file, left_speaker_name, right_speaker_name,
             
             for t in transcript:
                 current_minute = int(t['start'] / 60)
-                
                 # Add timestamp header every 5 minutes
                 if current_minute - last_timestamp_minute >= 5:
                     timestamp_header = f"\n## {format_timestamp(t['start'])}\n\n"
@@ -351,9 +341,9 @@ def process_stereo_audio(video_file, left_speaker_name, right_speaker_name,
 
 ⚠️ IMPORTANT: Click the "⬇️ Download Transcript" button below to save your file!
 The transcript will be saved to your browser's default download location."""
-
+        
         yield success_msg, preview, str(output_file), str(output_file)
-    
+        
     except Exception as e:
         yield f"❌ Error: {str(e)}", None, None, None
 
@@ -363,12 +353,12 @@ config = load_config()
 # Gradio interface with enhanced UX
 with gr.Blocks(title="Stereo Channel Transcription") as demo:
     gr.Markdown("""
-    # 🎙️ Stereo Channel Transcription
-    
-    **Supports two input types:**
-    - **Dual-track MKV** (e.g., OBS recordings): Automatically merges Track 1→Left, Track 2→Right
-    - **Single stereo file** (MKV/MP4/WAV): Processes left/right channels directly
-    """)
+# 🎙️ Stereo Channel Transcription
+
+**Supports two input types:**
+- **Dual-track MKV** (e.g., OBS recordings): Automatically merges Track 1→Left, Track 2→Right
+- **Single stereo file** (MKV/MP4/WAV): Processes left/right channels directly
+""")
     
     with gr.Row():
         with gr.Column():
@@ -445,71 +435,72 @@ with gr.Blocks(title="Stereo Channel Transcription") as demo:
             )
     
     gr.Markdown("""
-    ---
-    ### 🎙️ How It Works
-    
-    **Dual-Track Files (OBS recordings):**
-    - Automatically detects multiple audio tracks
-    - Merges Track 1 (mic) to LEFT channel, Track 2 (meeting/desktop) to RIGHT channel
-    - Then transcribes each channel separately
-    
-    **Single Stereo Files:**
-    - Processes LEFT and RIGHT channels directly
-    
-    ### ⚠️ File Download Instructions
-    
-    After transcription completes:
-    1. ✅ Click the **"⬇️ Download Transcript"** button (below Start button)
-    2. ✅ File saves to your browser's default download location
-    3. ✅ Move it from Downloads to wherever you need it
-    
-    ---
-    
-    ### ⚙️ Performance Notes
-    
-    - **First run**: Model downloads automatically (~39MB for tiny.en, ~200MB for medium, ~1.5GB for large-v2)
-    - **Processing time**: ~5-10 seconds per minute of audio with tiny.en on Intel CPU
-    - **Supported formats**: MKV, MP4, AVI, MOV, WAV, MP3
-    
-    ### 💡 Tips
-    
-    - **Markdown (MD)**: Clean format with timestamps every 5 minutes, bold speaker names
-    - Use **tiny.en** model for fastest processing (10x faster than large, good accuracy)
-    - Use **medium.en** model for best accuracy/speed balance
-    - Use **small.en** model for faster processing (3x speed vs medium, slight quality loss)
-    - SRT format works great for video editors
-    - JSON format preserves all metadata
-    
-    ### ⚙️ Configuration File (Optional)
-    
-    - Create a `transcribe_config.json` file in the same folder as this script to set defaults
-    - Copy `transcribe_config.example.json` as a starting point
-    - Available options: `default_model`, `default_format`, `default_left_speaker`, `default_right_speaker`
-    - Changes take effect when you restart the application
-    - Example config:
-    
-    ```json
-    {
-      "default_model": "tiny.en",
-      "default_format": "md",
-      "default_left_speaker": "Interviewer",
-      "default_right_speaker": "Guest"
-    }
-    ```
-    """)
-    
+---
+### 🎙️ How It Works
+
+**Dual-Track Files (OBS recordings):**
+- Automatically detects multiple audio tracks
+- Merges Track 1 (mic) to LEFT channel, Track 2 (meeting/desktop) to RIGHT channel
+- Then transcribes each channel separately
+
+**Single Stereo Files:**
+- Processes LEFT and RIGHT channels directly
+
+### ⚠️ File Download Instructions
+
+After transcription completes:
+1. ✅ Click the **"⬇️ Download Transcript"** button (below Start button)
+2. ✅ File saves to your browser's default download location
+3. ✅ Move it from Downloads to wherever you need it
+
+---
+
+### ⚙️ Performance Notes
+
+- **First run**: Model downloads automatically (~39MB for tiny.en, ~200MB for medium, ~1.5GB for large-v2)
+- **Processing time**: ~1-2 seconds per minute of audio with tiny.en on Intel CPU (4-5x faster than WhisperX!)
+- **Supported formats**: MKV, MP4, AVI, MOV, WAV, MP3
+
+### 💡 Tips
+
+- **Markdown (MD)**: Clean format with timestamps every 5 minutes, bold speaker names
+- Use **tiny.en** model for fastest processing (10x faster than large, good accuracy)
+- Use **medium.en** model for best accuracy/speed balance
+- Use **small.en** model for faster processing (3x speed vs medium, slight quality loss)
+- SRT format works great for video editors
+- JSON format preserves all metadata
+
+### ⚙️ Configuration File (Optional)
+
+- Create a `transcribe_config.json` file in the same folder as this script to set defaults
+- Copy `transcribe_config.example.json` as a starting point
+- Available options: `default_model`, `default_format`, `default_left_speaker`, `default_right_speaker`
+- Changes take effect when you restart the application
+- Example config:
+```json
+{
+    "default_model": "tiny.en",
+    "default_format": "md",
+    "default_left_speaker": "Interviewer",
+    "default_right_speaker": "Guest"
+}
+
+""")
+
     # Event handlers
     process_btn.click(
-        fn=process_stereo_audio,
-        inputs=[video_input, left_speaker, right_speaker, output_name, model_dropdown, format_dropdown],
-        outputs=[status_output, preview_output, file_output, download_button]
+    fn=process_stereo_audio,
+    inputs=[video_input, left_speaker, right_speaker, output_name, model_dropdown, format_dropdown],
+    outputs=[status_output, preview_output, file_output, download_button]
     )
-    
+
     # Clear button resets everything
     clear_btn.click(
-        fn=lambda: (None, "", "", "", "tiny.en", "md", "", "", None, None),
-        inputs=[],
-        outputs=[video_input, left_speaker, right_speaker, output_name, model_dropdown, format_dropdown, status_output, preview_output, file_output, download_button]
+    fn=lambda: (None, "", "", "", "tiny.en", "md", "", "", None, None),
+    inputs=[],
+    outputs=[video_input, left_speaker, right_speaker, output_name, model_dropdown, format_dropdown, status_output, preview_output, file_output, download_button]
     )
 
 demo.launch(server_name="0.0.0.0", server_port=7860)
+
+
