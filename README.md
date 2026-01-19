@@ -30,6 +30,37 @@ Upgrading the app is as simple as pulling or rebuilding the image, without manua
 - The compose file uses environment variables from `.env` to mount your chosen directory into the container at `/data` and mounts a local `./whisper-models` directory into `/root/.cache/huggingface` for model caching.
 - On Windows 11, `MKV2TranscriptUp.bat` and `MKV2TranscriptDown.bat` are convenience scripts that check whether Docker Desktop is running and then call `docker-compose up -d` or `docker-compose down` to control the container.
 
+##### Update:  Moved To WhisperX
+
+Tougher to get sync'ed, but looked like successfully updated.  A list of things that went wrong.
+
+
+
+**Issue 1: PyTorch 2.6 Model Loading Error**
+- **Problem**: PyTorch 2.6 changed default security settings that blocked WhisperX models containing omegaconf objects
+- **Error**: "WeightsUnpickler error: Unsupported global: GLOBAL omegaconf.listconfig.ListConfig"
+- **Why it worked locally**: Local environment had older cached models; Docker downloaded fresh models that triggered new restrictions
+
+**Issue 2: Wrong Data Type for Safe Globals**
+- **Problem**: Attempted to add safe globals using strings instead of class objects
+- **Error**: "'str' object has no attribute '__module__'"
+- **Fix**: Import actual class and pass class object instead of string
+
+**Issue 3: Multiple Omegaconf Classes**
+- **Problem**: WhisperX models use multiple omegaconf classes (ListConfig, ContainerMetadata, etc.)
+- **Issue**: Each class would need to be added individually (whack-a-mole problem)
+
+*Final Solution
+
+**Monkey patched torch.load()** to force weights_only=False for all model loading operations, bypassing PyTorch 2.6 security restrictions for trusted WhisperX models.
+
+##### Changes Made
+
+1. Added 3-line monkey patch to top of app.py
+2. Pinned PyTorch to version 2.6.0 in Dockerfile for consistency
+
+
+
 #### Prerequisites (Host Machine)
 
 - **Windows 11** with Docker Desktop installed and running.
