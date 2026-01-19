@@ -1,9 +1,14 @@
-﻿import gradio as gr
+﻿import torch
+# Patch torch.load to use weights_only=False by default for WhisperX compatibility
+_original_load = torch.load
+torch.load = lambda *args, **kwargs: _original_load(*args, **{**kwargs, 'weights_only': False})
+
+import gradio as gr
 import subprocess
 import os
 import tempfile
 from pathlib import Path
-from faster_whisper import WhisperModel
+import whisperx
 from datetime import timedelta
 import json
 
@@ -20,7 +25,7 @@ def load_config():
     config_path = script_dir / "transcribe_config.json"
     
     default_config = {
-        "default_model": "medium",
+        "default_model": "tiny.en",
         "default_format": "md",
         "default_left_speaker": "",
         "default_right_speaker": ""
@@ -30,9 +35,9 @@ def load_config():
         try:
             with open(config_path, 'r') as f:
                 user_config = json.load(f)
-                # Merge user config with defaults
-                default_config.update(user_config)
-                print(f"✓ Loaded config from: {config_path}")
+            # Merge user config with defaults
+            default_config.update(user_config)
+            print(f"✓ Loaded config from: {config_path}")
         except Exception as e:
             print(f"⚠️ Warning: Could not load config file: {e}")
     
@@ -104,8 +109,9 @@ def merge_dual_track_to_stereo(video_path, temp_dir):
     
     return stereo_output
 
-def process_stereo_audio(video_file, left_speaker_name, right_speaker_name, 
-                         output_filename, model_size="medium", output_format="md"):
+def process_stereo_audio(video_file, left_speaker_name, right_speaker_name,
+                        output_filename, model_size="tiny.en", output_format="md"):
+    
     if not video_file:
         return "❌ Error: No file selected", None, None, None
     
@@ -182,28 +188,35 @@ def process_stereo_audio(video_file, left_speaker_name, right_speaker_name,
             yield f"❌ Error extracting right channel: {result_right.stderr}", None, None, None
             return
         
-        yield f"🤖 Loading Whisper model (first run may take 2-3 minutes to download)...", None, None, None
+        yield f"🤖 Loading WhisperX model (first run may take 2-3 minutes to download)...", None, None, None
         
-        # Load Whisper model (CPU-optimized)
-        model = WhisperModel(model_size, device="cpu", compute_type="int8")
+        # Load WhisperX model (CPU-optimized)
+        model = whisperx.load_model(
+            model_size,
+            device="cpu",
+            compute_type="int8",
+            language="en"
+        )
+        
+        # Load audio files
+        left_audio = whisperx.load_audio(str(left_channel))
+        right_audio = whisperx.load_audio(str(right_channel))
         
         # Transcribe left channel
         yield f"🎤 Transcribing {left_name}...", None, None, None
-        left_segments, left_info = model.transcribe(
-            str(left_channel),
-            beam_size=5,
-            word_timestamps=False
+        left_result = model.transcribe(
+            left_audio,
+            batch_size=8
         )
-        left_transcript = list(left_segments)
+        left_transcript = list(left_result['segments'])
         
         # Transcribe right channel
         yield f"🎤 Transcribing {right_name}...", None, None, None
-        right_segments, right_info = model.transcribe(
-            str(right_channel),
-            beam_size=5,
-            word_timestamps=False
+        right_result = model.transcribe(
+            right_audio,
+            batch_size=8
         )
-        right_transcript = list(right_segments)
+        right_transcript = list(right_result['segments'])
         
         yield "📝 Merging transcripts...", None, None, None
         
@@ -211,19 +224,20 @@ def process_stereo_audio(video_file, left_speaker_name, right_speaker_name,
         transcript = []
         for seg in left_transcript:
             transcript.append({
-                "start": seg.start,
-                "end": seg.end,
+                "start": seg['start'],
+                "end": seg['end'],
                 "speaker": left_name,
                 "channel": "left",
-                "text": seg.text.strip()
+                "text": seg['text'].strip()
             })
+        
         for seg in right_transcript:
             transcript.append({
-                "start": seg.start,
-                "end": seg.end,
+                "start": seg['start'],
+                "end": seg['end'],
                 "speaker": right_name,
                 "channel": "right",
-                "text": seg.text.strip()
+                "text": seg['text'].strip()
             })
         
         # Sort by timestamp
@@ -235,12 +249,13 @@ def process_stereo_audio(video_file, left_speaker_name, right_speaker_name,
             """Check if two transcripts are mostly identical (mono audio saved as stereo)"""
             if len(left_trans) == 0 or len(right_trans) == 0:
                 return False
+            
             if abs(len(left_trans) - len(right_trans)) > 5:  # Allow small differences
                 return False
             
             # Compare text content
-            left_text = " ".join([seg.text.strip() for seg in left_trans])
-            right_text = " ".join([seg.text.strip() for seg in right_trans])
+            left_text = " ".join([seg['text'].strip() for seg in left_trans])
+            right_text = " ".join([seg['text'].strip() for seg in right_trans])
             
             # Simple similarity check
             if left_text == right_text:
@@ -271,7 +286,7 @@ def process_stereo_audio(video_file, left_speaker_name, right_speaker_name,
                 for t in transcript
             ])
             output_file.write_text(output_text, encoding='utf-8')
-            
+        
         elif output_format == "md":
             # Markdown format with timestamps every 5 minutes
             md_content = []
@@ -290,15 +305,16 @@ def process_stereo_audio(video_file, left_speaker_name, right_speaker_name,
                 md_content.append(f"**{t['speaker']}**: {t['text']}\n\n")
             
             output_file.write_text("".join(md_content), encoding='utf-8')
-            
+        
         elif output_format == "srt":
             srt_content = []
             for i, t in enumerate(transcript, 1):
                 start_time = format_timestamp(t['start']).replace('.', ',')
                 end_time = format_timestamp(t['end']).replace('.', ',')
                 srt_content.append(f"{i}\n{start_time} --> {end_time}\n{t['speaker']}: {t['text']}\n")
-            output_file.write_text("\n".join(srt_content), encoding='utf-8')
             
+            output_file.write_text("\n".join(srt_content), encoding='utf-8')
+        
         elif output_format == "json":
             json_data = {
                 "source_file": source_path.name,
@@ -335,9 +351,9 @@ def process_stereo_audio(video_file, left_speaker_name, right_speaker_name,
 
 ⚠️ IMPORTANT: Click the "⬇️ Download Transcript" button below to save your file!
 The transcript will be saved to your browser's default download location."""
-        
+
         yield success_msg, preview, str(output_file), str(output_file)
-        
+    
     except Exception as e:
         yield f"❌ Error: {str(e)}", None, None, None
 
@@ -386,10 +402,10 @@ with gr.Blocks(title="Stereo Channel Transcription") as demo:
             
             with gr.Row():
                 model_dropdown = gr.Dropdown(
-                    choices=["tiny", "base", "small", "medium", "large-v2"],
-                    value=config.get("default_model", "medium"),
+                    choices=["tiny.en", "base.en", "small.en", "medium.en", "large-v2"],
+                    value=config.get("default_model", "tiny.en"),
                     label="🤖 Model Size",
-                    info="Medium = best balance. Large = most accurate but slower."
+                    info="Tiny = 10x faster. Medium = best balance. Large = most accurate but slower."
                 )
                 
                 format_dropdown = gr.Dropdown(
@@ -448,32 +464,38 @@ with gr.Blocks(title="Stereo Channel Transcription") as demo:
     3. ✅ Move it from Downloads to wherever you need it
     
     ---
+    
     ### ⚙️ Performance Notes
-    - **First run**: Model downloads automatically (~200MB for medium, ~1.5GB for large-v2)
-    - **Processing time**: ~1-2 minutes per minute of audio on Intel CPU
+    
+    - **First run**: Model downloads automatically (~39MB for tiny.en, ~200MB for medium, ~1.5GB for large-v2)
+    - **Processing time**: ~5-10 seconds per minute of audio with tiny.en on Intel CPU
     - **Supported formats**: MKV, MP4, AVI, MOV, WAV, MP3
     
     ### 💡 Tips
+    
     - **Markdown (MD)**: Clean format with timestamps every 5 minutes, bold speaker names
-    - Use **medium** model for best accuracy/speed balance
-    - Use **small** model for faster processing (3x speed, slight quality loss)
+    - Use **tiny.en** model for fastest processing (10x faster than large, good accuracy)
+    - Use **medium.en** model for best accuracy/speed balance
+    - Use **small.en** model for faster processing (3x speed vs medium, slight quality loss)
     - SRT format works great for video editors
     - JSON format preserves all metadata
     
     ### ⚙️ Configuration File (Optional)
+    
     - Create a `transcribe_config.json` file in the same folder as this script to set defaults
     - Copy `transcribe_config.example.json` as a starting point
     - Available options: `default_model`, `default_format`, `default_left_speaker`, `default_right_speaker`
     - Changes take effect when you restart the application
     - Example config:
-      ```json
-      {
-        "default_model": "small",
-        "default_format": "md",
-        "default_left_speaker": "Interviewer",
-        "default_right_speaker": "Guest"
-      }
-      ```
+    
+    ```json
+    {
+      "default_model": "tiny.en",
+      "default_format": "md",
+      "default_left_speaker": "Interviewer",
+      "default_right_speaker": "Guest"
+    }
+    ```
     """)
     
     # Event handlers
@@ -485,7 +507,7 @@ with gr.Blocks(title="Stereo Channel Transcription") as demo:
     
     # Clear button resets everything
     clear_btn.click(
-        fn=lambda: (None, "", "", "", "medium", "md", "", "", None, None),
+        fn=lambda: (None, "", "", "", "tiny.en", "md", "", "", None, None),
         inputs=[],
         outputs=[video_input, left_speaker, right_speaker, output_name, model_dropdown, format_dropdown, status_output, preview_output, file_output, download_button]
     )
