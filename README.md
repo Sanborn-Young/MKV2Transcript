@@ -156,8 +156,8 @@ Options:
 #### Performance
 
 - On a Intel 12th Gen Core i7-1260P processor it takes around 8 minutes to get a useful transcript from and hour and 15 minute meeting with tiny model.
-- The `medium` model is usually the best balance of accuracy and speed for most use cases.  But I find that tiny is good enough.
-- The `small` and `tiny` models are significantly faster (often ~3×) but with some loss in transcription quality.
+- The `medium` model is a total mystery to me. When benchmarked against the tiny model, it takes 20 times as long to get back. And when I take a look at the usefulness of it, it comes back disjointed between the speakers and you need to reassemble it using an LLM to get it to make sense. Hopefully somebody can experiment with this, but right now it would not be something I would suggest for anything.
+- The `small` and `tiny` models are significantly faster.
 
 #### License
 
