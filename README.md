@@ -10,9 +10,9 @@ MKV2Transcript is a stereo channel transcription tool that runs entirely inside 
 
 Once you learn how to use Docker, it simplifies your tremendously. And the Good News this Github is that it has basically everything you need so that you can set it up in Windows 11 and double click a batch file to launch it.
 
-You do not need to install Python, FFmpeg, or any machine learning libraries on your own machine; everything required is bundled inside the Docker image. 
-Dependency versions and system-level packages are controlled by the Dockerfile, so you avoid "it works on my machine" issues and conflicting Python environments.
-Upgrading the app is as simple as pulling or rebuilding the image, without manually reinstalling packages on your host.
+You do not need to install Python, FFmpeg, or any machine learning libraries on your own machine; everything required is bundled inside the Docker image.  Dependency versions and system-level packages are controlled by the Dockerfile, so you avoid "it works on my machine" issues and conflicting Python environments.  Upgrading the app is as simple as pulling or rebuilding the image, without manually reinstalling packages on your host.
+
+I did push a version of this to Docker Hub as https://hub.docker.com/r/sanbornyoung/mkv2transcript but I may not keep it sync'ed as version 2.0.0.
 
 #### Features
 
@@ -30,37 +30,9 @@ Upgrading the app is as simple as pulling or rebuilding the image, without manua
 - The compose file uses environment variables from `.env` to mount your chosen directory into the container at `/data` and mounts a local `./whisper-models` directory into `/root/.cache/huggingface` for model caching.
 - On Windows 11, `MKV2TranscriptUp.bat` and `MKV2TranscriptDown.bat` are convenience scripts that check whether Docker Desktop is running and then call `docker-compose up -d` or `docker-compose down` to control the container.
 
-##### Update:  Moved To WhisperX
+##### Update:  Moved To Faster Whisper
 
-Tougher to get sync'ed, but looked like successfully updated.  A list of things that went wrong.
-
-
-
-**Issue 1: PyTorch 2.6 Model Loading Error**
-- **Problem**: PyTorch 2.6 changed default security settings that blocked WhisperX models containing omegaconf objects
-- **Error**: "WeightsUnpickler error: Unsupported global: GLOBAL omegaconf.listconfig.ListConfig"
-- **Why it worked locally**: Local environment had older cached models; Docker downloaded fresh models that triggered new restrictions
-
-**Issue 2: Wrong Data Type for Safe Globals**
-- **Problem**: Attempted to add safe globals using strings instead of class objects
-- **Error**: "'str' object has no attribute '__module__'"
-- **Fix**: Import actual class and pass class object instead of string
-
-**Issue 3: Multiple Omegaconf Classes**
-- **Problem**: WhisperX models use multiple omegaconf classes (ListConfig, ContainerMetadata, etc.)
-- **Issue**: Each class would need to be added individually (whack-a-mole problem)
-
-*Final Solution
-
-**Monkey patched torch.load()** to force weights_only=False for all model loading operations, bypassing PyTorch 2.6 security restrictions for trusted WhisperX models.
-
-##### Changes Made
-
-1. Added 3-line monkey patch to top of app.py
-2. Pinned PyTorch to version 2.6.0 in Dockerfile for consistency
-
-
-
+Note to Self:  I was thinking this would be short calls, but then realized it actually was pretty cool, so I decided to upgrade performance, and went from Whisper to WhisperX to Faster-Whisper.  Should have thought this out first.
 #### Prerequisites (Host Machine)
 
 - **Windows 11** with Docker Desktop installed and running.
@@ -81,6 +53,7 @@ Tougher to get sync'ed, but looked like successfully updated.  A list of things 
    - Update `DATA_PATH` to point to the directory containing your audio/video files
    - For Windows, use forward slashes: `DATA_PATH=C:/Users/YourUsername` or `DATA_PATH=C:/Users/YourUsername/Videos`
    - The `DATA_PATH` directory will be accessible to the application at `/data` inside the container
+   - If you read the post on setting up OBS Studio, then the easy thing to do is have the application look at where you are storing your Google Meet OBS MKV files.
 
 3. Ensure Docker Desktop is installed and running on Windows 11 before starting the service.
 
@@ -96,7 +69,7 @@ The `.env` file controls where the application can access your files. This file 
 
 **Example `.env` for Windows:**
 
-    DATA_PATH=C:/Users/YourUsername/Documents
+    DATA_PATH=C:/Users/YourUsername/Documents/WEBMEETINGS
     WHISPER_CACHE=./whisper-models
     GRADIO_PORT=7860
 
@@ -182,9 +155,8 @@ Options:
 
 #### Performance
 
-- First run will download the selected Whisper model into the `whisper-models` directory, which may be ~200 MB for `medium` or ~1.5 GB for `large-v2`, depending on your choice.
-- Processing speed is typically around 1–2 minutes of compute time per minute of audio on modern CPUs, depending on the chosen model and hardware.
-- The `medium` model is usually the best balance of accuracy and speed for most use cases.
+- On a Intel 12th Gen Core i7-1260P processor it takes around 8 minutes to get a useful transcript from and hour and 15 minute meeting with tiny model.
+- The `medium` model is usually the best balance of accuracy and speed for most use cases.  But I find that tiny is good enough.
 - The `small` and `tiny` models are significantly faster (often ~3×) but with some loss in transcription quality.
 
 #### License
